@@ -10,14 +10,15 @@
   values ​​entered in a custom web page into flash.
 */
 
-
 #include <WiFi.h>
 #include <WebServer.h>
 #include <SPIFFS.h>
-#include <ESP32Servo.h>
 using WebServerClass = WebServer;
-
+//#define AUTOCONNECT_NOUSE_JSON
 #include <AutoConnect.h>
+#include "time.h"
+#include <ServoValve.h>
+#include <CronTask.h>
 
 /*
   AC_USE_SPIFFS indicates SPIFFS or LittleFS as available file systems that
@@ -30,218 +31,483 @@ using WebServerClass = WebServer;
 #include <SPIFFS.h>
 fs::SPIFFSFS &FlashFS = SPIFFS;
 
+const char *ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 0;
+const int daylightOffset_sec = 3600;
 
-#define PAGE_ELEMENTS "/elements.json"
-#define PAGE_SAVE "/save.json"
+#define VALVE_SERVO_CONFIG_FILE "/valve.struct"
+
+#define CRON_TASK_CONFIG_FILE "/cron.struct"
+
+ACText(header1, "<h1>Servo Settings</h1>");
+ACText(saveResulteMessage, "");
+ACText(caption1, "<h2>Pulse Width</h2>");
+ACInput(minPulseWidth, "500", "Min", "\\d+", "", AC_Tag_BR, AC_Input_Number);
+ACInput(maxPulseWidth, "2500", "Max", "\\d+", "", AC_Tag_BR, AC_Input_Number);
+ACText(caption2, "<h2>Angle Position</h2>");
+ACInput(openAngle, "0", "Open Angle", "\\d+", "", AC_Tag_BR, AC_Input_Number);
+ACInput(closeAngle, "90", "Close Angle", "\\d+", "", AC_Tag_BR, AC_Input_Number);
+ACInput(actionDuration, "2000", "Action Duraction", "\\d+", "", AC_Tag_BR, AC_Input_Number);
+ACSubmit(valveServo_save, "Save", "/valveServo?action=save");
+
+AutoConnectAux valveServoSetting("/valveServo", "Valve Servo Setting", true,
+                                 {header1, saveResulteMessage, caption1, minPulseWidth, maxPulseWidth, caption2, openAngle, closeAngle, actionDuration, valveServo_save});
+
+ACText(header, "<h1>Rega Tu</h1>");
+ACText(timeText, "");
+ACSubmit(openValveButton, "Open", "/?action=open");
+ACSubmit(closeValveButton, "Close", "/?action=close");
+ACSubmit(sleepValveButton, "Sleep", "/sleep", AC_Tag_BR);
+AutoConnectAux home("/", "Rega Tu", false,
+                    {header, timeText, openValveButton, closeValveButton, sleepValveButton});
+
+std::vector<String> hourArray = {String("0"), String("1"), String("2"), String("3"), String("4"), String("5"), String("6"), String("7"), String("8"), String("9"),
+                                 String("10"), String("11"), String("12"), String("13"), String("14"), String("15"), String("16"), String("17"), String("18"),
+                                 String("19"), String("20"), String("21"), String("22"), String("23")};
+
+std::vector<String> minuteArray = {
+    String("0"), String("1"), String("2"), String("3"), String("4"), String("5"), String("6"), String("7"), String("8"), String("9"),
+    String("10"), String("11"), String("12"), String("13"), String("14"), String("15"), String("16"), String("17"), String("18"), String("19"),
+    String("20"), String("21"), String("22"), String("23"), String("24"), String("25"), String("26"), String("27"), String("28"), String("29"),
+    String("30"), String("31"), String("32"), String("33"), String("34"), String("35"), String("36"), String("37"), String("38"), String("39"),
+    String("40"), String("41"), String("42"), String("43"), String("44"), String("45"), String("46"), String("47"), String("48"), String("49"),
+    String("50"), String("51"), String("52"), String("53"), String("54"), String("55"), String("56"), String("57"), String("58"), String("59")};
+
+std::vector<String> humidityArray = {
+    String("0"), String("1"), String("2"), String("3"), String("4"), String("5"), String("6"), String("7"), String("8"), String("9"),
+    String("10"), String("11"), String("12"), String("13"), String("14"), String("15"), String("16"), String("17"), String("18"), String("19"),
+    String("20"), String("21"), String("22"), String("23"), String("24"), String("25"), String("26"), String("27"), String("28"), String("29"),
+    String("30"), String("31"), String("32"), String("33"), String("34"), String("35"), String("36"), String("37"), String("38"), String("39"),
+    String("40"), String("41"), String("42"), String("43"), String("44"), String("45"), String("46"), String("47"), String("48"), String("49"),
+    String("50"), String("51"), String("52"), String("53"), String("54"), String("55"), String("56"), String("57"), String("58"), String("59"),
+    String("60"), String("61"), String("62"), String("63"), String("64"), String("65"), String("66"), String("67"), String("68"), String("69"),
+    String("70"), String("71"), String("72"), String("73"), String("74"), String("75"), String("76"), String("77"), String("78"), String("79"),
+    String("80"), String("81"), String("82"), String("83"), String("84"), String("85"), String("86"), String("87"), String("88"), String("89"),
+    String("90"), String("91"), String("92"), String("93"), String("94"), String("95"), String("96"), String("97"), String("98"), String("99"),
+    String("100")};
+
+ACText(header2, "<h1>Task Settings</h1>");
+ACText(saveResult2Message, "");
+ACCheckbox(task1Active, "on", "Task 1", false, AC_Behind, AC_Tag_None);
+ACSelect(task1Humidity, humidityArray, "Max humidity", 0, AC_Tag_None);
+ACSelect(task1StartHour, hourArray, " Start", 0, AC_Tag_None);
+ACSelect(task1StartMinute, minuteArray, ":", 0, AC_Tag_None);
+ACSelect(task1EndHour, hourArray, " Stop", 0, AC_Tag_None);
+ACSelect(task1EndMinute, minuteArray, ":", 0, AC_Tag_BR);
+ACCheckbox(task2Active, "on", "Task 2", false, AC_Behind, AC_Tag_None);
+ACSelect(task2Humidity, humidityArray, "Max humidity", 0, AC_Tag_None);
+ACSelect(task2StartHour, hourArray, " Start", 0, AC_Tag_None);
+ACSelect(task2StartMinute, minuteArray, ":", 0, AC_Tag_None);
+ACSelect(task2EndHour, hourArray, " Stop", 0, AC_Tag_None);
+ACSelect(task2EndMinute, minuteArray, ":", 0, AC_Tag_BR);
+ACCheckbox(task3Active, "on", "Task 3", false, AC_Behind, AC_Tag_None);
+ACSelect(task3Humidity, humidityArray, "Max humidity", 0, AC_Tag_None);
+ACSelect(task3StartHour, hourArray, " Start", 0, AC_Tag_None);
+ACSelect(task3StartMinute, minuteArray, ":", 0, AC_Tag_None);
+ACSelect(task3EndHour, hourArray, " Stop", 0, AC_Tag_None);
+ACSelect(task3EndMinute, minuteArray, ":", 0, AC_Tag_BR);
+ACCheckbox(task4Active, "on", "Task 4", false, AC_Behind, AC_Tag_None);
+ACSelect(task4Humidity, humidityArray, "Max humidity", 0, AC_Tag_None);
+ACSelect(task4StartHour, hourArray, " Start", 0, AC_Tag_None);
+ACSelect(task4StartMinute, minuteArray, ":", 0, AC_Tag_None);
+ACSelect(task4EndHour, hourArray, " Stop", 0, AC_Tag_None);
+ACSelect(task4EndMinute, minuteArray, ":", 0, AC_Tag_BR);
+ACSubmit(tasksSave, "Save", "/tasks?action=save");
+
+AutoConnectAux tasksSetting("/tasks", "Cron Tasks", true,
+                            {header2, saveResult2Message,
+                             task1Active, task1Humidity, task1StartHour, task1StartMinute, task1EndHour, task1EndMinute,
+                             task2Active, task2Humidity, task2StartHour, task2StartMinute, task2EndHour, task2EndMinute,
+                             task3Active, task3Humidity, task3StartHour, task3StartMinute, task3EndHour, task3EndMinute,
+                             task4Active, task4Humidity, task4StartHour, task4StartMinute, task4EndHour, task4EndMinute,
+                             tasksSave});
 
 WebServerClass server;
 AutoConnect portal(server);
 AutoConnectConfig config;
-AutoConnectAux elementsAux;
-AutoConnectAux saveAux;
-Servo servo; // Variável Servo
 
+RTC_DATA_ATTR ValveServoSetting currentValveSettings = {500, 2400, 5, 90, 2000, CLOSE};
+ServoValve servoValve(GPIO_NUM_14, &currentValveSettings);
 
-void print_wakeup_reason(){
+RTC_DATA_ATTR CronTaskSettings currentTaskSettings = {
+    false,
+    0,
+    0,
+    0,
+    false,
+    0,
+    0,
+    0,
+    false,
+    0,
+    0,
+    0,
+};
+CronTaskManager cronTaskManager(&currentTaskSettings);
+
+struct tm timeinfo;
+
+// Display touchpad origin
+void print_wakeup_touchpad()
+{
+  touch_pad_t touchPin;
+  touchPin = esp_sleep_get_touchpad_wakeup_status();
+
+  switch (touchPin)
+  {
+  case 0:
+    Serial.println("Touch detected on GPIO 4");
+    break;
+  case 1:
+    Serial.println("Touch detected on GPIO 0");
+    break;
+  case 2:
+    Serial.println("Touch detected on GPIO 2");
+    break;
+  case 3:
+    Serial.println("Touch detected on GPIO 15");
+    break;
+  case 4:
+    Serial.println("Touch detected on GPIO 13");
+    break;
+  case 5:
+    Serial.println("Touch detected on GPIO 12");
+    break;
+  case 6:
+    Serial.println("Touch detected on GPIO 14");
+    break;
+  case 7:
+    Serial.println("Touch detected on GPIO 27");
+    break;
+  case 8:
+    Serial.println("Touch detected on GPIO 33");
+    break;
+  case 9:
+    Serial.println("Touch detected on GPIO 32");
+    break;
+  default:
+    Serial.println("Wakeup not by touchpad");
+    break;
+  }
+}
+
+// Display touchpad origin
+void print_wakeup_ext1()
+{
+  uint64_t mask = 0x0000000000000001;
+  uint64_t status = esp_sleep_get_ext1_wakeup_status();
+  for (int i = 0; i < 39; ++i)
+  {
+    if ((mask & status) != 0x0)
+      Serial.printf("GPIO %d cause wake up", i);
+    mask = mask << 1;
+  }
+}
+
+void print_wakeup_reason()
+{
   esp_sleep_wakeup_cause_t wakeup_reason;
 
   wakeup_reason = esp_sleep_get_wakeup_cause();
 
-  switch(wakeup_reason)
+  switch (wakeup_reason)
   {
-    case ESP_SLEEP_WAKEUP_EXT0 : Serial.println("Wakeup caused by external signal using RTC_IO"); break;
-    case ESP_SLEEP_WAKEUP_EXT1 : Serial.println("Wakeup caused by external signal using RTC_CNTL"); break;
-    case ESP_SLEEP_WAKEUP_TIMER : Serial.println("Wakeup caused by timer"); break;
-    case ESP_SLEEP_WAKEUP_TOUCHPAD : Serial.println("Wakeup caused by touchpad"); break;
-    case ESP_SLEEP_WAKEUP_ULP : Serial.println("Wakeup caused by ULP program"); break;
-    case ESP_SLEEP_WAKEUP_GPIO : Serial.println("Wakeup caused by GPIO"); break;
-    case ESP_SLEEP_WAKEUP_UART : Serial.println("Wakeup caused by UART"); break;
-    default : Serial.printf("Wakeup was not caused by deep sleep: %d\n",wakeup_reason); break;
+  case ESP_SLEEP_WAKEUP_EXT0:
+    Serial.println("Wakeup caused by external signal using RTC_IO");
+    break;
+  case ESP_SLEEP_WAKEUP_EXT1:
+    Serial.println("Wakeup caused by external signal using RTC_CNTL");
+    print_wakeup_ext1();
+    break;
+  case ESP_SLEEP_WAKEUP_TIMER:
+    Serial.println("Wakeup caused by external signal using RTC_CNTL");
+    Serial.println("Wakeup caused by timer");
+    break;
+  case ESP_SLEEP_WAKEUP_TOUCHPAD:
+    Serial.println("Wakeup caused by touchpad");
+    print_wakeup_touchpad();
+    break;
+  case ESP_SLEEP_WAKEUP_ULP:
+    Serial.println("Wakeup caused by ULP program");
+    break;
+  case ESP_SLEEP_WAKEUP_GPIO:
+    Serial.println("Wakeup caused by GPIO");
+    break;
+  case ESP_SLEEP_WAKEUP_UART:
+    Serial.println("Wakeup caused by UART");
+    break;
+  default:
+    Serial.printf("Wakeup was not caused by deep sleep: %d\n", wakeup_reason);
+    break;
   }
 }
 
-
-#define Threshold 40    /* Greater the value, more the sensitivity */
-
+#define Threshold 40 /* Greater the value, more the sensitivity */
 
 #define BUTTON_PIN_BITMASK 0x300000000
 
-// Display touchpad origin
-void print_wakeup_touchpad(){
-  touch_pad_t touchPin;
-  touchPin = esp_sleep_get_touchpad_wakeup_status();
+String getLocalTimeString()
+{
 
-  switch(touchPin)
+  char timeStringBuff[50]; //50 chars should be enough
+  strftime(timeStringBuff, sizeof(timeStringBuff), "%Y/%m/%d %H:%M:%S", &timeinfo);
+  //print like "const char*"
+  Serial.println(timeStringBuff);
+
+  //Optional: Construct String object
+  return String(timeStringBuff);
+}
+
+void loadValveConfigFromFile()
+{
+  FlashFS.begin();
+
+  if (FlashFS.exists(VALVE_SERVO_CONFIG_FILE))
   {
-    case 0  : Serial.println("Touch detected on GPIO 4"); break;
-    case 1  : Serial.println("Touch detected on GPIO 0"); break;
-    case 2  : Serial.println("Touch detected on GPIO 2"); break;
-    case 3  : Serial.println("Touch detected on GPIO 15"); break;
-    case 4  : Serial.println("Touch detected on GPIO 13"); break;
-    case 5  : Serial.println("Touch detected on GPIO 12"); break;
-    case 6  : Serial.println("Touch detected on GPIO 14"); break;
-    case 7  : Serial.println("Touch detected on GPIO 27"); break;
-    case 8  : Serial.println("Touch detected on GPIO 33"); break;
-    case 9  : Serial.println("Touch detected on GPIO 32"); break;
-    default : Serial.println("Wakeup not by touchpad"); break;
+    File myFile = FlashFS.open(VALVE_SERVO_CONFIG_FILE, "r");
+
+    int readed = myFile.read((byte *)&currentValveSettings, sizeof(currentValveSettings));
+    if (sizeof(currentValveSettings) != readed)
+    {
+      Serial.printf("Error reading file: readed %d expected %d!", readed, sizeof(currentValveSettings));
+      currentValveSettings.minPulseWidth = 500;
+      currentValveSettings.maxPulseWidth = 2400;
+      currentValveSettings.openAngle = 0;
+      currentValveSettings.closeAngle = 90;
+      currentValveSettings.actionDuration = 2000;
+      currentValveSettings.state = CLOSE;
+    }
+    else
+    {
+      Serial.printf("Readed file: %d!", readed);
+    }
+    myFile.close();
   }
+
+  FlashFS.end();
 }
 
-// Display touchpad origin
-void print_wakeup_ext1(){
-  uint64_t mask = 0x0000000000000001;
-  uint64_t status = esp_sleep_get_ext1_wakeup_status();
-  for(int i = 0; i<39;++i){
-    if ((mask & status) != 0x0)
-      Serial.printf("GPIO %d cause wake up",i);
-    mask = mask<<1;
+void saveValveConfigToFile()
+{
+  FlashFS.begin();
+  File myFile = FlashFS.open(VALVE_SERVO_CONFIG_FILE, "w");
+  myFile.write((byte *)&currentValveSettings, sizeof(currentValveSettings));
+  myFile.close();
+  FlashFS.end();
+}
+
+void loadCronTaskFromFile()
+{
+  FlashFS.begin();
+
+  if (FlashFS.exists(CRON_TASK_CONFIG_FILE))
+  {
+    File myFile = FlashFS.open(CRON_TASK_CONFIG_FILE, "r");
+
+    int readed = myFile.read((byte *)&currentTaskSettings, sizeof(currentTaskSettings));
+    if (sizeof(currentTaskSettings) != readed)
+    {
+      Serial.printf("Error reading file: readed %d expected %d!", readed, sizeof(currentTaskSettings));
+    }
+    else
+    {
+      Serial.printf("Readed file: %d!", readed);
+    }
+    myFile.close();
   }
+
+  FlashFS.end();
 }
 
-// Execute this function when Touch Pad in pressed
-void callback() {
-  Serial.println("Do something when Touch Pad is pressed");
+void saveCronTaskToFile()
+{
+  FlashFS.begin();
+  File myFile = FlashFS.open(CRON_TASK_CONFIG_FILE, "w");
+  myFile.write((byte *)&currentTaskSettings, sizeof(currentTaskSettings));
+  myFile.close();
+  FlashFS.end();
 }
 
+long last_press = 0;
+bool press = false;
 
-
-void openValve(){
-  servo.write(0);
-  servo.attach(GPIO_NUM_12, 400, 2500);
-  
-  delay(1000);
-  servo.detach();
+void touchAttachInterruptCallback()
+{
+  press = true;
 }
-void closeValve(){
-  servo.write(90);
-  servo.attach(GPIO_NUM_12, 400, 2500);
-  
-  delay(1000);
-  servo.detach();
-}
-
-
 
 void setup()
 {
-  delay(1000);
+
+  servoValve.setupPwm();
   Serial.begin(115200);
   Serial.println();
-
-  //Servo Setup
-  ESP32PWM::allocateTimer(0);
-  ESP32PWM::allocateTimer(1);
-  ESP32PWM::allocateTimer(2);
-  ESP32PWM::allocateTimer(3);
-
-  servo.setPeriodHertz(50);// Standard 50hz servo
-  
+  loadValveConfigFromFile();
+  loadCronTaskFromFile();
 
   print_wakeup_reason();
   //Print the wakeup reason for ESP32 and touchpad too
-  print_wakeup_touchpad();
-  print_wakeup_ext1();
-
-  //Setup interrupt on Touch Pad 4 (GPIO4)
-  touchAttachInterrupt(T0, callback, Threshold);
 
   //Configure Touchpad as wakeup source
   esp_sleep_enable_touchpad_wakeup();
-  
+
   //Configure mask as ext1 wake up source for HIGH logic level
   esp_sleep_enable_ext1_wakeup(BUTTON_PIN_BITMASK, ESP_EXT1_WAKEUP_ANY_HIGH);
-
-
-  // Responder of root page handled directly from WebServer class.
-  server.on("/", []()
-            {
-              String content = "Place the root page with the sketch application.&ensp;";
-              content += AUTOCONNECT_LINK(COG_24);
-              server.send(200, "text/html", content);
-            });
 
   server.on("/sleep", []()
             {
               String content = "<h2>Sleep</h2>";
               server.send(200, "text/html", content);
-              
-              ESP.deepSleep(600000000);//10minutos
-            });
-
-  server.on("/openValve", []()
-            {
-              String content = "<h2>openValve</h2>";
-              server.send(200, "text/html", content);
-              openValve();
-            });
-  server.on("/closeValve", []()
-            {
-              String content = "<h2>closeValve</h2>";
-              server.send(200, "text/html", content);
-              closeValve();
+              ESP.deepSleep(600000000); //10minutos
             });
 
   // Load a custom web page described in JSON as PAGE_ELEMENT and
   // register a handler. This handler will be invoked from
-  // AutoConnectSubmit named the Load defined on the same page.
-  FlashFS.begin();
-  File page = FlashFS.open(PAGE_ELEMENTS, "r");
-  elementsAux.load(page);
-  page.close();
-  page = FlashFS.open(PAGE_SAVE, "r");
-  saveAux.load(page);
-  page.close();
-  FlashFS.end();
-  saveAux.on([](AutoConnectAux &aux, PageArgument &arg)
-             {
-               // You can validate input values ​​before saving with
-               // AutoConnectInput::isValid function.
-               // Verification is using performed regular expression set in the
-               // pattern attribute in advance.
-               AutoConnectInput &input = elementsAux["input"].as<AutoConnectInput>();
-               aux["validated"].value = input.isValid() ? String() : String("Input data pattern missmatched.");
+  // AutoConnectSubmit named the valveServoSettingLoad defined on the same page.
+  home.on([](AutoConnectAux &aux, PageArgument &arg)
+          {
+            aux["timeText"].value = getLocalTimeString();
+            if (arg.hasArg("action"))
+            {
+              if (arg.arg("action") == "open")
+              {
+                servoValve.openValve();
+              }
+              else if (arg.arg("action") == "close")
+              {
+                servoValve.closeValve();
+              }
+            }
+            return String();
+          });
 
-               // The following line sets only the value, but it is HTMLified as
-               // formatted text using the format attribute.
-               aux["caption"].value = PAGE_ELEMENTS;
+  valveServoSetting.on([](AutoConnectAux &aux, PageArgument &arg)
+                       {
+                         if (arg.hasArg("action"))
+                         {
+                           if (arg.arg("action") == "save")
+                           {
+                             currentValveSettings.minPulseWidth = aux["minPulseWidth"].value.toInt();
+                             currentValveSettings.maxPulseWidth = aux["maxPulseWidth"].value.toInt();
+                             currentValveSettings.openAngle = aux["openAngle"].value.toInt();
+                             currentValveSettings.closeAngle = aux["closeAngle"].value.toInt();
+                             currentValveSettings.actionDuration = aux["actionDuration"].value.toInt();
+                             saveValveConfigToFile();
+                             aux["saveResulteMessage"].value = String("Config Save");
+                           }
+                         }
+                         else
+                         {
+                           aux["minPulseWidth"].value = String(currentValveSettings.minPulseWidth);
+                           aux["maxPulseWidth"].value = String(currentValveSettings.maxPulseWidth);
+                           aux["openAngle"].value = String(currentValveSettings.openAngle);
+                           aux["closeAngle"].value = String(currentValveSettings.closeAngle);
+                           aux["actionDuration"].value = String(currentValveSettings.actionDuration);
+                         }
+                         return String();
+                       });
 
-#if defined(ARDUINO_ARCH_ESP8266)
-               FlashFS.begin();
-#elif defined(ARDUINO_ARCH_ESP32)
-               FlashFS.begin(true);
-#endif
-               File param = FlashFS.open(PAGE_ELEMENTS, "w");
-               if (param)
-               {
-                 // Save as a loadable set for parameters.
-                 elementsAux.saveElement(param);
-                 param.close();
-                 // Read the saved elements again to display.
-                 param = FlashFS.open(PAGE_ELEMENTS, "r");
-                 aux["echo"].value = param.readString();
-                 param.close();
-               }
-               else
-               {
-                 aux["echo"].value = "Filesystem failed to open.";
-               }
-               FlashFS.end();
-               return String();
-             });
-  portal.join({elementsAux, saveAux});
+  tasksSetting.on([](AutoConnectAux &aux, PageArgument &arg)
+                  {
+                    if (arg.hasArg("action"))
+                    {
+                      if (arg.arg("action") == "save")
+                      {
+                        currentTaskSettings.task1Active = task1Active.checked;
+                        currentTaskSettings.task1MinuteOfDayStart = (task1StartHour.selected - 1) * 60 + task1StartMinute.selected - 1;
+                        currentTaskSettings.task1MinuteOfDayStop = (task1EndHour.selected - 1) * 60 + task1EndMinute.selected - 1;
+                        currentTaskSettings.task1MaxHumidity = task1Humidity.selected - 1;
+                        ;
+                        currentTaskSettings.task2Active = task2Active.checked;
+                        currentTaskSettings.task2MinuteOfDayStart = (task2StartHour.selected - 1) * 60 + task2StartMinute.selected - 1;
+                        currentTaskSettings.task2MinuteOfDayStop = (task2EndHour.selected - 1) * 60 + task2EndMinute.selected - 1;
+                        currentTaskSettings.task2MaxHumidity = task2Humidity.selected - 1;
+                        ;
+                        currentTaskSettings.task3Active = task3Active.checked;
+                        currentTaskSettings.task3MinuteOfDayStart = (task3StartHour.selected - 1) * 60 + task3StartMinute.selected - 1;
+                        ;
+                        currentTaskSettings.task3MinuteOfDayStop = (task3EndHour.selected - 1) * 60 + task3EndMinute.selected - 1;
+                        ;
+                        currentTaskSettings.task3MaxHumidity = task3Humidity.selected - 1;
+                        ;
+                        currentTaskSettings.task4Active = task4Active.checked;
+                        currentTaskSettings.task4MinuteOfDayStart = (task4StartHour.selected - 1) * 60 + task4StartMinute.selected - 1;
+                        ;
+                        currentTaskSettings.task4MinuteOfDayStop = (task4EndHour.selected - 1) * 60 + task4EndMinute.selected - 1;
+                        ;
+                        currentTaskSettings.task4MaxHumidity = task4Humidity.selected - 1;
+                        ;
+
+                        saveCronTaskToFile();
+                        aux["saveResult2Message"].value = String("Config Save");
+                      }
+                    }
+                    else
+                    {
+                      task1Active.checked = currentTaskSettings.task1Active;
+                      task1StartHour.selected = 1 + currentTaskSettings.task1MinuteOfDayStart / 60;
+                      task1StartMinute.selected = 1 + currentTaskSettings.task1MinuteOfDayStart % 60;
+                      task1EndHour.selected = 1 + currentTaskSettings.task1MinuteOfDayStop / 60;
+                      task1EndMinute.selected = 1 + currentTaskSettings.task1MinuteOfDayStop % 60;
+                      task1Humidity.selected = 1 + currentTaskSettings.task1MaxHumidity;
+                      task2Active.checked = currentTaskSettings.task2Active;
+                      task2StartHour.selected = 1 + currentTaskSettings.task2MinuteOfDayStart / 60;
+                      task2StartMinute.selected = 1 + currentTaskSettings.task2MinuteOfDayStart % 60;
+                      task2EndHour.selected = 1 + currentTaskSettings.task2MinuteOfDayStop / 60;
+                      task2EndMinute.selected = 1 + currentTaskSettings.task2MinuteOfDayStop % 60;
+                      task2Humidity.selected = 1 + currentTaskSettings.task2MaxHumidity;
+                      task3Active.checked = currentTaskSettings.task3Active;
+                      task3StartHour.selected = 1 + currentTaskSettings.task3MinuteOfDayStart / 60;
+                      task3StartMinute.selected = 1 + currentTaskSettings.task3MinuteOfDayStart % 60;
+                      task3EndHour.selected = 1 + currentTaskSettings.task3MinuteOfDayStop / 60;
+                      task3EndMinute.selected = 1 + currentTaskSettings.task3MinuteOfDayStop % 60;
+                      task3Humidity.selected = 1 + currentTaskSettings.task3MaxHumidity;
+                      task4Active.checked = currentTaskSettings.task4Active;
+                      task4StartHour.selected = 1 + currentTaskSettings.task4MinuteOfDayStart / 60;
+                      task4StartMinute.selected = 1 + currentTaskSettings.task4MinuteOfDayStart % 60;
+                      task4EndHour.selected = 1 + currentTaskSettings.task4MinuteOfDayStop / 60;
+                      task4EndMinute.selected = 1 + currentTaskSettings.task4MinuteOfDayStop % 60;
+                      task4Humidity.selected = 1 + currentTaskSettings.task4MaxHumidity;
+                    }
+                    return String();
+                  });
+
+  portal.join({home, valveServoSetting, tasksSetting});
   config.ticker = true;
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   portal.config(config);
   portal.begin();
+
+  // Add the callback function to be called when the button is pressed.
+  touchAttachInterrupt(T0, touchAttachInterruptCallback, 50);
+  Serial.printf("Status valve = %d\n", currentValveSettings.state);
+  Serial.printf("Task1 values %d %d %d %d\n", currentTaskSettings.task1Active, currentTaskSettings.task1MinuteOfDayStart, currentTaskSettings.task1MinuteOfDayStop, currentTaskSettings.task1MaxHumidity);
 }
 
 void loop()
 {
-  server.handleClient();
-  portal.handleRequest(); // Need to handle AutoConnect menu.
   if (WiFi.status() == WL_IDLE_STATUS)
   {
     ESP.restart();
     delay(1000);
   }
-}
 
+  getLocalTime(&timeinfo, 50);
+
+  long t = millis();
+  if (press)
+  {
+    if ((t - last_press) > 100)
+    {
+      //New press
+      Serial.println("Button togle");
+      servoValve.togleValve();
+    }
+    press = false;
+    last_press = t;
+  }
+
+  servoValve.tick();
+  cronTaskManager.checkAction(servoValve, &timeinfo, (short)0);
+  portal.handleClient(); // Need to handle AutoConnect menu.
+}
