@@ -30,11 +30,14 @@ public:
      * Initialize the AnalogRead library.
      * @param pin The pin to be used for analog input.
      */
-    ServoValve(uint8_t pin,ValveServoSetting *inServoSettings)
+    ServoValve(uint8_t pin,uint8_t pinPNP,ValveServoSetting *inServoSettings)
     {
+        
         servoSettings = inServoSettings;
         _pin = pin;
+        _pinPNP = pinPNP;
         _servo.setPeriodHertz(50); // Standard 50hz servo
+        pinMode(_pinPNP,OUTPUT);
     }
 
     void setupPwm()
@@ -53,7 +56,7 @@ public:
         {
         case OPEN: //this way we can force to open again if necessary
         case CLOSE:
-        
+            digitalWrite(_pinPNP,LOW);//Enable pnp
             _servo.attach(_pin, servoSettings->minPulseWidth, servoSettings->maxPulseWidth);
         case CLOSING:
             _servo.write(servoSettings->openAngle);
@@ -70,7 +73,8 @@ public:
         switch (servoSettings->state)
         {
         case CLOSE: //this way we can force to close again if necessary
-        case OPEN:        
+        case OPEN:
+            digitalWrite(_pinPNP,LOW);//Enable pnp        
             _servo.attach(_pin, servoSettings->minPulseWidth, servoSettings->maxPulseWidth);
         case OPENING:
             _servo.write(servoSettings->closeAngle);
@@ -83,7 +87,7 @@ public:
         }
     }
 
-    void togleValve()
+    boolean togleValve()
     {
         Serial.println("Opening valve");
         switch (servoSettings->state)
@@ -91,49 +95,56 @@ public:
         case OPEN:
         case OPENING:
             closeValve();
-            break;
+            return false;
 
         case CLOSE:
         case CLOSING:
             openValve();
-            break;
+            return true;
 
         default:
             break;
         }
+        return false;
     }
 
-    void tick()
+    boolean tick()
     {
         switch (servoSettings->state)
         {
         case OPENING:
-        if (millis() - _stop_time > servoSettings->actionDuration)
+            if (millis() - _stop_time > servoSettings->actionDuration)
             {
+                
+                digitalWrite(_pinPNP,HIGH);//Disable pnp
                 _servo.detach();
                 servoSettings->state = OPEN;
                 Serial.println("Open valve");
                 
             }
-            break;
+            return false;
 
         case CLOSING:
-        if (millis() - _stop_time > servoSettings->actionDuration)
+            if (millis() - _stop_time > servoSettings->actionDuration)
             {
+                digitalWrite(_pinPNP,HIGH);//Disable pnp        
                 _servo.detach();
                 servoSettings->state = CLOSE;
                 Serial.println("Close valve");
             }
-            break;
+            return false;
 
             
         default:
-            break;
+            return true;
         }
     }
 
+    
+
 protected:
     uint8_t _pin; // hardware pin number.
+    uint8_t _pinPNP; //pnp enable pin
     ValveServoSetting* servoSettings;
     Servo _servo;
     unsigned long _stop_time = 0;

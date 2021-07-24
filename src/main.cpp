@@ -9,6 +9,7 @@
   It also represents a basic structural frame for saving and reusing
   values ​​entered in a custom web page into flash.
 */
+#define AC_DEBUG
 
 #include <WiFi.h>
 #include <WebServer.h>
@@ -19,7 +20,6 @@ using WebServerClass = WebServer;
 #include "time.h"
 #include <ServoValve.h>
 #include <CronTask.h>
-
 /*
   AC_USE_SPIFFS indicates SPIFFS or LittleFS as available file systems that
   will become the AUTOCONNECT_USE_SPIFFS identifier and is exported as shown
@@ -39,6 +39,7 @@ const int daylightOffset_sec = 3600;
 
 #define CRON_TASK_CONFIG_FILE "/cron.struct"
 
+
 ACText(header1, "<h1>Servo Settings</h1>");
 ACText(saveResulteMessage, "");
 ACText(caption1, "<h2>Pulse Width</h2>");
@@ -51,15 +52,18 @@ ACInput(actionDuration, "2000", "Action Duraction", "\\d+", "", AC_Tag_BR, AC_In
 ACSubmit(valveServo_save, "Save", "/valveServo?action=save");
 
 AutoConnectAux valveServoSetting("/valveServo", "Valve Servo Setting", true,
-                                 {header1, saveResulteMessage, caption1, minPulseWidth, maxPulseWidth, caption2, openAngle, closeAngle, actionDuration, valveServo_save});
+                                 {header1, saveResulteMessage, caption1, minPulseWidth, maxPulseWidth,
+                                  caption2, openAngle, closeAngle, actionDuration, valveServo_save});
 
 ACText(header, "<h1>Rega Tu</h1>");
 ACText(timeText, "");
+
+ACText(vccText, "");
 ACSubmit(openValveButton, "Open", "/?action=open");
 ACSubmit(closeValveButton, "Close", "/?action=close");
 ACSubmit(sleepValveButton, "Sleep", "/sleep", AC_Tag_BR);
 AutoConnectAux home("/", "Rega Tu", false,
-                    {header, timeText, openValveButton, closeValveButton, sleepValveButton});
+                    {header, timeText, vccText, openValveButton, closeValveButton, sleepValveButton});
 
 std::vector<String> hourArray = {String("0"), String("1"), String("2"), String("3"), String("4"), String("5"), String("6"), String("7"), String("8"), String("9"),
                                  String("10"), String("11"), String("12"), String("13"), String("14"), String("15"), String("16"), String("17"), String("18"),
@@ -112,6 +116,8 @@ ACSelect(task4StartHour, hourArray, " Start", 0, AC_Tag_None);
 ACSelect(task4StartMinute, minuteArray, ":", 0, AC_Tag_None);
 ACSelect(task4EndHour, hourArray, " Stop", 0, AC_Tag_None);
 ACSelect(task4EndMinute, minuteArray, ":", 0, AC_Tag_BR);
+ACSelect(manualDuration, minuteArray, "Manual timer duration:", 0, AC_Tag_BR);
+
 ACSubmit(tasksSave, "Save", "/tasks?action=save");
 
 AutoConnectAux tasksSetting("/tasks", "Cron Tasks", true,
@@ -120,32 +126,44 @@ AutoConnectAux tasksSetting("/tasks", "Cron Tasks", true,
                              task2Active, task2Humidity, task2StartHour, task2StartMinute, task2EndHour, task2EndMinute,
                              task3Active, task3Humidity, task3StartHour, task3StartMinute, task3EndHour, task3EndMinute,
                              task4Active, task4Humidity, task4StartHour, task4StartMinute, task4EndHour, task4EndMinute,
-                             tasksSave});
+                             manualDuration,tasksSave});
 
 WebServerClass server;
 AutoConnect portal(server);
 AutoConnectConfig config;
 
 RTC_DATA_ATTR ValveServoSetting currentValveSettings = {500, 2400, 5, 90, 2000, CLOSE};
-ServoValve servoValve(GPIO_NUM_14, &currentValveSettings);
+ServoValve servoValve(GPIO_NUM_14,GPIO_NUM_33, &currentValveSettings);
 
 RTC_DATA_ATTR CronTaskSettings currentTaskSettings = {
     false,
     0,
     0,
-    0,
+    (short)100,
     false,
     0,
     0,
-    0,
+    (short)100,
     false,
     0,
     0,
+    (short)100,
+    false,
     0,
+    0,
+    (short)100,
+    -1,
+    -1,
+    30
 };
 CronTaskManager cronTaskManager(&currentTaskSettings);
 
+time_t now;
 struct tm timeinfo;
+
+long last_press = 0;
+long keep_waken = 0;
+bool press = false;
 
 // Display touchpad origin
 void print_wakeup_touchpad()
@@ -249,8 +267,8 @@ void print_wakeup_reason()
 String getLocalTimeString()
 {
 
-  char timeStringBuff[50]; //50 chars should be enough
-  strftime(timeStringBuff, sizeof(timeStringBuff), "%Y/%m/%d %H:%M:%S", &timeinfo);
+  char timeStringBuff[70]; //50 chars should be enough
+  strftime(timeStringBuff, sizeof(timeStringBuff), "%Y/%m/%d %H:%M:%S %Z", &timeinfo);
   //print like "const char*"
   Serial.println(timeStringBuff);
 
@@ -260,7 +278,7 @@ String getLocalTimeString()
 
 void loadValveConfigFromFile()
 {
-  FlashFS.begin();
+  FlashFS.begin(true);
 
   if (FlashFS.exists(VALVE_SERVO_CONFIG_FILE))
   {
@@ -269,7 +287,7 @@ void loadValveConfigFromFile()
     int readed = myFile.read((byte *)&currentValveSettings, sizeof(currentValveSettings));
     if (sizeof(currentValveSettings) != readed)
     {
-      Serial.printf("Error reading file: readed %d expected %d!", readed, sizeof(currentValveSettings));
+      Serial.printf("Error reading file: readed %d expected %d!\n", readed, sizeof(currentValveSettings));
       currentValveSettings.minPulseWidth = 500;
       currentValveSettings.maxPulseWidth = 2400;
       currentValveSettings.openAngle = 0;
@@ -307,11 +325,11 @@ void loadCronTaskFromFile()
     int readed = myFile.read((byte *)&currentTaskSettings, sizeof(currentTaskSettings));
     if (sizeof(currentTaskSettings) != readed)
     {
-      Serial.printf("Error reading file: readed %d expected %d!", readed, sizeof(currentTaskSettings));
+      Serial.printf("Error reading file: readed %d expected %d!\n", readed, sizeof(currentTaskSettings));
     }
     else
     {
-      Serial.printf("Readed file: %d!", readed);
+      Serial.printf("Readed file: %d!\n", readed);
     }
     myFile.close();
   }
@@ -328,37 +346,95 @@ void saveCronTaskToFile()
   FlashFS.end();
 }
 
-long last_press = 0;
-bool press = false;
+void keepWaken()
+{
+  keep_waken = millis();
+}
+
+void hibernate()
+{
+  Serial.println("Going to sleep");
+  digitalWrite(GPIO_NUM_26,LOW); // turn on led
+  getLocalTimeString();
+  ESP.deepSleep(30000000); //30sec
+}
+
+int readHumidity()
+{
+  long x = analogRead(GPIO_NUM_34);
+  const long in_min = 300;
+  const long in_max = 1200;
+  const long out_min = 100;
+  const long out_max = 0;
+  const long dividend = out_max - out_min;
+  const long divisor = in_max - in_min;
+  if (x < in_min)
+  {
+    x = in_min;
+  }
+  else if (x > in_max)
+  {
+    x = in_max;
+  }
+  const long delta = x - in_min;
+
+  return (delta * dividend + (divisor / 2)) / divisor + out_min;
+}
 
 void touchAttachInterruptCallback()
 {
   press = true;
 }
+void updateTime(){
+  time(&now);
+  localtime_r(&now, &timeinfo);
+}
 
 void setup()
 {
-
+  setenv("TZ","WET0WEST,M3.5.0/1,M10.5.0",1);
+  tzset();
+  pinMode(GPIO_NUM_34,INPUT);
+  pinMode(GPIO_NUM_26,OUTPUT); 
+  digitalWrite(GPIO_NUM_26,HIGH); // turn on led
   servoValve.setupPwm();
   Serial.begin(115200);
   Serial.println();
-  loadValveConfigFromFile();
-  loadCronTaskFromFile();
-
+  getLocalTimeString();
   print_wakeup_reason();
-  //Print the wakeup reason for ESP32 and touchpad too
-
   //Configure Touchpad as wakeup source
   esp_sleep_enable_touchpad_wakeup();
-
+  touchAttachInterrupt(T0, touchAttachInterruptCallback, 50);
   //Configure mask as ext1 wake up source for HIGH logic level
-  esp_sleep_enable_ext1_wakeup(BUTTON_PIN_BITMASK, ESP_EXT1_WAKEUP_ANY_HIGH);
+  //esp_sleep_enable_ext1_wakeup(BUTTON_PIN_BITMASK, ESP_EXT1_WAKEUP_ANY_HIGH);
+  //Print the wakeup reason for ESP32 and touchpad too
+  switch (esp_sleep_get_wakeup_cause())
+  {
+  case ESP_SLEEP_WAKEUP_TOUCHPAD:
+    Serial.println("Init press");
+    press = true;
+    break;
+  case ESP_SLEEP_WAKEUP_TIMER:
+    Serial.println("WAKEUP_TIMER");
+    updateTime();
+    cronTaskManager.checkAction(&servoValve, &timeinfo, (short)readHumidity());
+    while (!servoValve.tick()) // wait action to end befor sleep
+    {
+      delay(100);
+    }
+    hibernate();
+
+    break;
+  default:
+    loadValveConfigFromFile();
+    loadCronTaskFromFile();
+  }
 
   server.on("/sleep", []()
             {
               String content = "<h2>Sleep</h2>";
               server.send(200, "text/html", content);
-              ESP.deepSleep(600000000); //10minutos
+              hibernate();
             });
 
   // Load a custom web page described in JSON as PAGE_ELEMENT and
@@ -366,16 +442,20 @@ void setup()
   // AutoConnectSubmit named the valveServoSettingLoad defined on the same page.
   home.on([](AutoConnectAux &aux, PageArgument &arg)
           {
+            keepWaken();
             aux["timeText"].value = getLocalTimeString();
+            aux["vccText"].value = String(readHumidity());
             if (arg.hasArg("action"))
             {
               if (arg.arg("action") == "open")
               {
                 servoValve.openValve();
+                cronTaskManager.scheduleManualClose(&timeinfo);
               }
               else if (arg.arg("action") == "close")
               {
                 servoValve.closeValve();
+                cronTaskManager.resetManualClose();
               }
             }
             return String();
@@ -383,6 +463,7 @@ void setup()
 
   valveServoSetting.on([](AutoConnectAux &aux, PageArgument &arg)
                        {
+                         keepWaken();
                          if (arg.hasArg("action"))
                          {
                            if (arg.arg("action") == "save")
@@ -409,6 +490,7 @@ void setup()
 
   tasksSetting.on([](AutoConnectAux &aux, PageArgument &arg)
                   {
+                    keepWaken();
                     if (arg.hasArg("action"))
                     {
                       if (arg.arg("action") == "save")
@@ -436,6 +518,9 @@ void setup()
                         currentTaskSettings.task4MinuteOfDayStop = (task4EndHour.selected - 1) * 60 + task4EndMinute.selected - 1;
                         ;
                         currentTaskSettings.task4MaxHumidity = task4Humidity.selected - 1;
+                        ;
+
+                        currentTaskSettings.manualDuration = manualDuration.selected - 1;
                         ;
 
                         saveCronTaskToFile();
@@ -468,32 +553,33 @@ void setup()
                       task4EndHour.selected = 1 + currentTaskSettings.task4MinuteOfDayStop / 60;
                       task4EndMinute.selected = 1 + currentTaskSettings.task4MinuteOfDayStop % 60;
                       task4Humidity.selected = 1 + currentTaskSettings.task4MaxHumidity;
+                      manualDuration.selected = 1 + currentTaskSettings.manualDuration;
                     }
                     return String();
                   });
-
+  // Add the callback function to be called when the button is pressed.
+  
   portal.join({home, valveServoSetting, tasksSetting});
   config.ticker = true;
+  config.autoReconnect = true;    // Attempt automatic reconnection.
+  config.reconnectInterval = 6;   
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   portal.config(config);
   portal.begin();
 
-  // Add the callback function to be called when the button is pressed.
-  touchAttachInterrupt(T0, touchAttachInterruptCallback, 50);
-  Serial.printf("Status valve = %d\n", currentValveSettings.state);
-  Serial.printf("Task1 values %d %d %d %d\n", currentTaskSettings.task1Active, currentTaskSettings.task1MinuteOfDayStart, currentTaskSettings.task1MinuteOfDayStop, currentTaskSettings.task1MaxHumidity);
+  
 }
 
 void loop()
 {
+
   if (WiFi.status() == WL_IDLE_STATUS)
   {
+    Serial.println("WL_IDLE_STATUS =  ESP.restart(); ");
     ESP.restart();
     delay(1000);
   }
-
-  getLocalTime(&timeinfo, 50);
-
+  updateTime();
   long t = millis();
   if (press)
   {
@@ -501,13 +587,25 @@ void loop()
     {
       //New press
       Serial.println("Button togle");
-      servoValve.togleValve();
+      if (servoValve.togleValve()){
+        cronTaskManager.scheduleManualClose(&timeinfo);
+      } else {
+        cronTaskManager.resetManualClose();
+      }
+      
+      keepWaken();
     }
     press = false;
     last_press = t;
   }
 
-  servoValve.tick();
-  cronTaskManager.checkAction(servoValve, &timeinfo, (short)0);
+  cronTaskManager.checkAction(&servoValve, &timeinfo, (short)readHumidity());
   portal.handleClient(); // Need to handle AutoConnect menu.
+
+  if (servoValve.tick() && (t - keep_waken > 300000)) //300sec 5min
+  {
+    hibernate();
+  }
+  
+  
 }

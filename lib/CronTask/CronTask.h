@@ -22,6 +22,9 @@ typedef struct
     int task4MinuteOfDayStart;
     int task4MinuteOfDayStop;
     short task4MaxHumidity;
+    int lastMinuteOfDayCheck;
+    int manualStartClose;
+    int manualDuration;
 } CronTaskSettings;
 
 class CronTaskManager
@@ -31,72 +34,93 @@ public:
      * Initialize the AnalogRead library.
      * @param pin The pin to be used for analog input.
      */
-    CronTaskManager(CronTaskSettings *inCronTaskSettings){
+    CronTaskManager(CronTaskSettings *inCronTaskSettings)
+    {
         cronTaskSettings = inCronTaskSettings;
     };
 
-    void checkAction(ServoValve servoValve, struct tm *timeinfo, short humidity)
+    void scheduleManualClose(struct tm *timeinfo){
+        cronTaskSettings->manualStartClose =  ((timeinfo->tm_hour * 60) + timeinfo->tm_min + cronTaskSettings->manualDuration +1) % 1440;
+    }
+
+    void resetManualClose(){
+        cronTaskSettings->manualStartClose =  -1;
+    }
+
+    void checkAction(ServoValve* servoValve, struct tm *timeinfo, short humidity)
     {
         int minuteOfDay = (timeinfo->tm_hour * 60) + timeinfo->tm_min;
 
-        if (minuteOfDay == lastMinuteCheck)
+        if (minuteOfDay == cronTaskSettings->lastMinuteOfDayCheck)
             return;
         else
-            Serial.printf("minuteOfDay %d\n",minuteOfDay);
-        
-        lastMinuteCheck = minuteOfDay;
-      
+            Serial.printf("minuteOfDay %d\n", minuteOfDay);
+
+        cronTaskSettings->lastMinuteOfDayCheck = minuteOfDay;
+
         if (cronTaskSettings->task1Active)
-        {
-            Serial.printf("Task1  is active\n");
+        {            
             if (minuteOfDay == cronTaskSettings->task1MinuteOfDayStart && humidity < cronTaskSettings->task1MaxHumidity)
             {
                 Serial.println("Task1 open");
-                servoValve.openValve();
+                servoValve->openValve();
             }
             if (minuteOfDay == cronTaskSettings->task1MinuteOfDayStop)
             {
                 Serial.println("Task1 close");
-                servoValve.closeValve();
+                servoValve->closeValve();
             }
         }
         if (cronTaskSettings->task2Active)
         {
             if (minuteOfDay == cronTaskSettings->task2MinuteOfDayStart && humidity < cronTaskSettings->task2MaxHumidity)
             {
-                servoValve.openValve();
+                Serial.println("Task2 open");
+                servoValve->openValve();
             }
             if (minuteOfDay == cronTaskSettings->task2MinuteOfDayStop)
             {
-                servoValve.closeValve();
+                Serial.println("Task2 close");
+                servoValve->closeValve();
             }
         }
         if (cronTaskSettings->task3Active)
         {
             if (minuteOfDay == cronTaskSettings->task3MinuteOfDayStart && humidity < cronTaskSettings->task3MaxHumidity)
             {
-                servoValve.openValve();
+                Serial.println("Task3 open");
+                servoValve->openValve();
             }
             if (minuteOfDay == cronTaskSettings->task3MinuteOfDayStop)
             {
-                servoValve.closeValve();
+                Serial.println("Task3 close");
+                servoValve->closeValve();
             }
         }
         if (cronTaskSettings->task4Active)
         {
             if (minuteOfDay == cronTaskSettings->task4MinuteOfDayStart && humidity < cronTaskSettings->task4MaxHumidity)
             {
-                servoValve.openValve();
+                Serial.println("Task4 open");
+                servoValve->openValve();
             }
             if (minuteOfDay == cronTaskSettings->task4MinuteOfDayStop)
             {
-                servoValve.closeValve();
+                Serial.println("Task4 close");
+                servoValve->closeValve();
             }
         }
-        
+        if (cronTaskSettings->manualStartClose>=0 && minuteOfDay >= cronTaskSettings->manualStartClose){
+            {
+                Serial.println("Manual timer Close");
+                servoValve->closeValve();
+                cronTaskSettings->manualStartClose = -1;
+            }
+        }
     };
-    int lastMinuteCheck = -1;
-    CronTaskSettings* cronTaskSettings;
+
+private:
+    CronTaskSettings *cronTaskSettings;
 };
 
 #endif
