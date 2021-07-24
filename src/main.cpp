@@ -562,10 +562,12 @@ void setup()
   portal.join({home, valveServoSetting, tasksSetting});
   config.ticker = true;
   config.autoReconnect = true;    // Attempt automatic reconnection.
-  config.reconnectInterval = 6;   
+  config.reconnectInterval = 6;
+  config.ota = AC_OTA_BUILTIN;
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   portal.config(config);
   portal.begin();
+
 
   
 }
