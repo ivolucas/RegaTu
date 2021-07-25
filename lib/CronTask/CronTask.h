@@ -47,7 +47,7 @@ public:
         cronTaskSettings->manualStartClose =  -1;
     }
 
-    void checkAction(ServoValve* servoValve, struct tm *timeinfo, short humidity)
+    void checkAction(ServoValve* servoValve, struct tm *timeinfo)
     {
         int minuteOfDay = (timeinfo->tm_hour * 60) + timeinfo->tm_min;
 
@@ -57,6 +57,7 @@ public:
             Serial.printf("minuteOfDay %d\n", minuteOfDay);
 
         cronTaskSettings->lastMinuteOfDayCheck = minuteOfDay;
+        int humidity = servoValve->readHumidity();
 
         if (cronTaskSettings->task1Active)
         {            
